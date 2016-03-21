@@ -83,9 +83,9 @@ import (
 )
 
 // Handle is a function that can be registered to a route to handle HTTP
-// requests. Like http.HandlerFunc, but has a parameters for context and
-// the values of wildcards (variables).
-type Handle func(context.Context, http.ResponseWriter, *http.Request, Params)
+// requests. Like http.HandlerFunc, but has a parameters for a context that
+// contains the values of wildcards (variables).
+type Handle func(context.Context, http.ResponseWriter, *http.Request)
 
 // Param is a single URL parameter, consisting of a key and a value.
 type Param struct {
@@ -97,6 +97,17 @@ type Param struct {
 // The slice is ordered, the first URL parameter is also the first slice value.
 // It is therefore safe to read values by the index.
 type Params []Param
+
+const paramsKey = "httprouter.params"
+
+func ByName(ctx context.Context, name string) string {
+	iParams := ctx.Value(paramsKey)
+	params, ok := iParams.(Params)
+	if !ok {
+		return ""
+	}
+	return params.ByName(name)
+}
 
 // ByName returns the value of the first Param which key matches the given name.
 // If no matching Param is found, an empty string is returned.
@@ -242,7 +253,7 @@ func (r *Router) Handle(method, path string, handle Handle) {
 // request handle.
 func (r *Router) Handler(method, path string, handler http.Handler) {
 	r.Handle(method, path,
-		func(_ context.Context, w http.ResponseWriter, req *http.Request, _ Params) {
+		func(_ context.Context, w http.ResponseWriter, req *http.Request) {
 			handler.ServeHTTP(w, req)
 		},
 	)
@@ -271,8 +282,8 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 
 	fileServer := http.FileServer(root)
 
-	r.GET(path, func(_ context.Context, w http.ResponseWriter, req *http.Request, ps Params) {
-		req.URL.Path = ps.ByName("filepath")
+	r.GET(path, func(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+		req.URL.Path = ByName(ctx, "filepath")
 		fileServer.ServeHTTP(w, req)
 	})
 }
@@ -333,6 +344,8 @@ func (r *Router) allowed(path, reqMethod string) (allow string) {
 	return
 }
 
+var ctx = context.Background()
+
 // ServeHTTP makes the router implement the http.Handler interface.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if r.PanicHandler != nil {
@@ -343,7 +356,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if root := r.trees[req.Method]; root != nil {
 		if handle, ps, tsr := root.getValue(path); handle != nil {
-			handle(context.Background(), w, req, ps)
+			pctx := context.WithValue(ctx, "httprouter.params", ps)
+			handle(pctx, w, req)
 			return
 		} else if req.Method != "CONNECT" && path != "/" {
 			code := 301 // Permanent redirect, request with GET method
